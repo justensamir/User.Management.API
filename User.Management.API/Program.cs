@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using User.Management.API.Models.Data;
+using User.Management.Service.Models;
+using User.Management.Service.Services;
 
 namespace User.Management.API
 {
@@ -37,6 +39,16 @@ namespace User.Management.API
                 options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
                 options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
             });
+
+            // Add Email Configs
+            var emailConfig = builder.Configuration
+                                     .GetSection("EmailConfiguartion")
+                                     .Get<EmailConfiguration>();
+
+            builder.Services.AddSingleton(emailConfig);
+
+            builder.Services.AddScoped<IEmailService, EmailService>();
+
 
             var app = builder.Build();
 

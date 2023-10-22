@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using User.Management.API.Models;
 using User.Management.API.Models.Authentication.SignUp;
+using User.Management.Service.Models;
+using User.Management.Service.Services;
 
 namespace User.Management.API.Controllers
 {
@@ -13,14 +15,17 @@ namespace User.Management.API.Controllers
         private readonly UserManager<IdentityUser> userManager;
         private readonly RoleManager<IdentityRole> roleManager;
         private readonly IConfiguration configuration;
+        private readonly IEmailService emailService;
 
         public AuthenticationController(UserManager<IdentityUser> userManager,
             RoleManager<IdentityRole> roleManager,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IEmailService emailService)
         {
             this.userManager = userManager;
             this.roleManager = roleManager;
             this.configuration = configuration;
+            this.emailService = emailService;
         }
 
         /// <summary>
@@ -65,9 +70,22 @@ namespace User.Management.API.Controllers
             }
             
                 
-                return  StatusCode(StatusCodes.Status500InternalServerError,
+            return  StatusCode(StatusCodes.Status500InternalServerError,
                     new Response{Status = "Error", Message="User Failed to Ceare"});
 
+        }
+
+        [HttpGet("SendMail")]
+        public async Task<IActionResult> TestEmail()
+        {
+            var message = new Message(new string[] { "smyr4916@gmail.com", 
+                                                     "moo.samir2000@gmail.com",
+                                                     "amrsaid166@gmail.com"}, 
+                                                     "Test Email Service", 
+                                                     "<h1>Hello Every One <span style=\"color: red;\">❤❤<span></h1>");
+            
+            await emailService.SendMessage(message);
+            return Ok("Email Sent Successfully");
         }
     }
 }
