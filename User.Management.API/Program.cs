@@ -40,12 +40,19 @@ namespace User.Management.API
                 options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
             });
 
+            // Add Config for Required Email
+            builder.Services.Configure<IdentityOptions>(
+                options => options.SignIn.RequireConfirmedEmail = true
+                );
+
             // Add Email Configs
             var emailConfig = builder.Configuration
                                      .GetSection("EmailConfiguartion")
                                      .Get<EmailConfiguration>();
 
             builder.Services.AddSingleton(emailConfig);
+
+
 
             builder.Services.AddScoped<IEmailService, EmailService>();
 
