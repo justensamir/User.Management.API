@@ -1,8 +1,13 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
 using System.Reflection.Metadata.Ecma335;
+using System.Security.Claims;
+using System.Text;
 using User.Management.API.Models;
+using User.Management.API.Models.Authentication.Login;
 using User.Management.API.Models.Authentication.SignUp;
 using User.Management.Service.Models;
 using User.Management.Service.Services;
@@ -32,12 +37,9 @@ namespace User.Management.API.Controllers
         
 
         [HttpPost("Register")]
-        [ProducesResponseType(StatusCodes.Status201Created)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> Register(RegisterUser registerUser, string role)
         {
-            // Check user Exist
+            // Check user Exist by Email
             var userByEmailExist = await userManager.FindByEmailAsync(registerUser.Email);
             if (userByEmailExist != null)
             {
@@ -45,7 +47,7 @@ namespace User.Management.API.Controllers
                        StatusCodes.Status403Forbidden,
                        "This Email already exists!");
             }
-
+            // Check user Exist by Username
             var userByNameExist = await userManager.FindByNameAsync(registerUser.UserName);
             if (userByNameExist != null)
             {
@@ -87,19 +89,6 @@ namespace User.Management.API.Controllers
 
         }
 
-        [HttpGet("SendMail")]
-        public async Task<IActionResult> TestEmail()
-        {
-            var message = new Message(new string[] { "smyr4916@gmail.com", 
-                                                     "moo.samir2000@gmail.com"}, 
-                                                     "Test Email Service", 
-                                                     "<h1>Hello Every One <span style=\"color: red;\">❤❤<span></h1>");
-            
-            await emailService.SendMessage(message);
-            return StatusCode(StatusCodes.Status200OK,
-                    new Response { Status = "Success", Message = "Email Sent Successfully" });
-        }
-
         [HttpGet("ConfirmEmail")]
         public async Task<IActionResult> ConfirmEmail(string token, string email)
         {
@@ -122,6 +111,58 @@ namespace User.Management.API.Controllers
             var confirmationLink = Url.Action(nameof(ConfirmEmail), "Authentication", new { token, email = user.Email }, Request.Scheme);
             var message = new Message(new string[] { user.Email! }, "Confiramtion Email", confirmationLink!);
             await emailService.SendMessage(message);
+        }
+
+        [HttpPost("Login")]
+        public async Task<IActionResult> Login(LoginModel loginModel)
+        {
+            var user = await userManager.FindByNameAsync(loginModel.Username);
+            if(user != null && await userManager.CheckPasswordAsync(user, loginModel.Password))
+            {
+                if (!user.EmailConfirmed) return StatusCode(StatusCodes.Status403Forbidden, "Email not Confirmed");
+                // Add token
+                var userRoles = await userManager.GetRolesAsync(user);
+                var token = GenerateJWT(user, userRoles);
+
+                return Ok(new { 
+                    token = new JwtSecurityTokenHandler().WriteToken(token).ToString(),
+                    expiration = token.ValidTo 
+                });
+            }
+            return Unauthorized("Invalid username or password!!");
+        }
+
+        private JwtSecurityToken GenerateJWT(IdentityUser user, IList<string> roles)
+        {
+            var key = configuration["Authentication:SecretForKey"];
+            // Step 2: Create Token
+            var securityKey = new SymmetricSecurityKey(
+                Encoding.ASCII.GetBytes(key)
+                );
+            // Step 2.1: Create 
+            var signinCredentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+            // Step 2.3 create claims
+            var claimsForToken = new List<Claim>
+            {
+                new Claim("sub", user.Id.ToString()),
+                new Claim("email", user.Email),
+                new Claim("username", user.UserName)
+            };
+            foreach(var role in roles)
+            {
+                claimsForToken.Add(new Claim("role", role));
+            }
+            // Step 2.4 create token
+            var jwtSecurityToken = new JwtSecurityToken(
+                issuer: configuration["Authentication:Issuer"],
+                audience: configuration["Authentication:Audience"],
+                claims: claimsForToken,
+                notBefore: DateTime.UtcNow,
+                expires: DateTime.UtcNow.AddMinutes(20),
+                signingCredentials: signinCredentials
+                );
+
+            return jwtSecurityToken;
         }
     }
 }

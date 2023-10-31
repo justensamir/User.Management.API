@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using System.Text;
 using User.Management.API.Models.Data;
 using User.Management.Service.Models;
 using User.Management.Service.Services;
@@ -18,7 +21,39 @@ namespace User.Management.API
             builder.Services.AddControllers();
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(options =>
+            {
+                options.SwaggerDoc("v1", new OpenApiInfo
+                {
+                    Title = "Auth Api",
+                    Version = "v1"
+                });
+
+                options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+                {
+                    In = ParameterLocation.Header,
+                    Description = "Please enter a vaild token",
+                    Name = "Authourization",
+                    Type = SecuritySchemeType.Http,
+                    BearerFormat = "JWT",
+                    Scheme = "Bearer"
+                });
+
+                options.AddSecurityRequirement(new OpenApiSecurityRequirement
+                {
+                    {
+                        new OpenApiSecurityScheme
+                        {
+                            Reference = new OpenApiReference
+                            {
+                                Type = ReferenceType.SecurityScheme,
+                                Id = "Bearer",
+                            }
+                        },
+                        new string[]{ }
+                    }
+                });
+            });
 
             // For Entityframework
             builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -30,15 +65,6 @@ namespace User.Management.API
             builder.Services.AddIdentity<IdentityUser, IdentityRole>()
                 .AddEntityFrameworkStores<ApplicationDbContext>()
                 .AddDefaultTokenProviders();
-
-
-            // For Authentication
-            builder.Services.AddAuthentication(options =>
-            {
-                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-                options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
-            });
 
             // Add Config for Required Email
             builder.Services.Configure<IdentityOptions>(
@@ -52,10 +78,26 @@ namespace User.Management.API
 
             builder.Services.AddSingleton(emailConfig);
 
-
-
             builder.Services.AddScoped<IEmailService, EmailService>();
+            // For Authentication
+            builder.Services.AddAuthentication(options =>
+            {
+                options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+                options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
+            });
 
+            builder.Services.AddAuthentication("Bearer")
+               .AddJwtBearer(options => options.TokenValidationParameters = new()
+               {
+                   ValidateIssuer = true,
+                   ValidateAudience = true,
+                   ValidateIssuerSigningKey = true,
+                   ValidIssuer = builder.Configuration["Authentication:Issuer"],
+                   ValidAudience = builder.Configuration["Authentication:Audience"],
+                   IssuerSigningKey = new SymmetricSecurityKey(
+                       Encoding.ASCII.GetBytes(builder.Configuration["Authentication:SecretForKey"]))
+               });
 
             var app = builder.Build();
 
@@ -67,6 +109,8 @@ namespace User.Management.API
             }
 
             app.UseHttpsRedirection();
+
+            app.UseAuthentication();
 
             app.UseAuthorization();
 
