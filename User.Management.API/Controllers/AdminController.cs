@@ -19,6 +19,6 @@ namespace User.Management.API.Controllers
                 "Samir",
                 "Alaa"
             });
-        }
+        }   
     }
 }

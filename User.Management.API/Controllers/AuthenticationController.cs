@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using System.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Reflection.Metadata.Ecma335;
 using System.Security.Claims;
@@ -20,16 +21,20 @@ namespace User.Management.API.Controllers
     {
         private readonly UserManager<IdentityUser> userManager;
         private readonly RoleManager<IdentityRole> roleManager;
+        private readonly SignInManager<IdentityUser> signInManager;
         private readonly IConfiguration configuration;
         private readonly IEmailService emailService;
 
-        public AuthenticationController(UserManager<IdentityUser> userManager,
+        public AuthenticationController(
+            UserManager<IdentityUser> userManager,
             RoleManager<IdentityRole> roleManager,
+            SignInManager<IdentityUser> signInManager,
             IConfiguration configuration,
             IEmailService emailService)
         {
             this.userManager = userManager;
             this.roleManager = roleManager;
+            this.signInManager = signInManager;
             this.configuration = configuration;
             this.emailService = emailService;
         }
@@ -120,9 +125,36 @@ namespace User.Management.API.Controllers
             if(user != null && await userManager.CheckPasswordAsync(user, loginModel.Password))
             {
                 if (!user.EmailConfirmed) return StatusCode(StatusCodes.Status403Forbidden, "Email not Confirmed");
+
+                if(user.TwoFactorEnabled)
+                {
+                    await signInManager.SignOutAsync();
+                    await signInManager.PasswordSignInAsync(user, loginModel.Password, false, true);
+
+                    var otp = await userManager.GenerateTwoFactorTokenAsync(user, "Email");
+                    Message message = new (new string[] { user.Email }, "OTP Confirmation",otp);
+                    await emailService.SendMessage(message);
+                    return StatusCode(
+                        StatusCodes.Status200OK,
+                        new { Status = "Success", Message = $"OTP Sent to {user.Email} Successfully" });
+                }
                 // Add token
                 var userRoles = await userManager.GetRolesAsync(user);
-                var token = GenerateJWT(user, userRoles);
+
+                // Create Claims
+                var claimsForToken = new List<Claim>
+                {
+                    new Claim("sub", user.Id.ToString()),
+                    new Claim("email", user.Email),
+                    new Claim("username", user.UserName)
+                };
+                foreach (var role in userRoles)
+                {
+                    claimsForToken.Add(new Claim("role", role));
+                }
+
+
+                var token = GenerateJWT(claimsForToken);
 
                 return Ok(new { 
                     token = new JwtSecurityTokenHandler().WriteToken(token).ToString(),
@@ -132,7 +164,42 @@ namespace User.Management.API.Controllers
             return Unauthorized("Invalid username or password!!");
         }
 
-        private JwtSecurityToken GenerateJWT(IdentityUser user, IList<string> roles)
+        [HttpPost("Login-2FAC")]
+        public async Task<IActionResult> Login2FAC(string username, string otp)
+        {
+            var user = await userManager.FindByNameAsync(username);
+            if(user != null && otp != null)
+            {
+                var result = await signInManager.TwoFactorSignInAsync("Email", otp, false, true);
+                if(result.Succeeded)
+                {
+                    var userRoles = await userManager.GetRolesAsync(user);
+                    // Create Claims
+                    var claimsForToken = new List<Claim>
+                    {
+                        new Claim("sub", user.Id.ToString()),
+                        new Claim("email", user.Email),
+                        new Claim("username", user.UserName)
+                    };
+                    foreach (var role in userRoles)
+                    {
+                        claimsForToken.Add(new Claim("role", role));
+                    }
+
+
+                    var token = GenerateJWT(claimsForToken);
+
+                    return Ok(new
+                    {
+                        token = new JwtSecurityTokenHandler().WriteToken(token).ToString(),
+                        expiration = token.ValidTo
+                    });
+                }
+            }
+            return NotFound("Invalid Username or OTP");
+        }
+
+        private JwtSecurityToken GenerateJWT(List<Claim> claims)
         {
             var key = configuration["Authentication:SecretForKey"];
             // Step 2: Create Token
@@ -141,22 +208,12 @@ namespace User.Management.API.Controllers
                 );
             // Step 2.1: Create 
             var signinCredentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
-            // Step 2.3 create claims
-            var claimsForToken = new List<Claim>
-            {
-                new Claim("sub", user.Id.ToString()),
-                new Claim("email", user.Email),
-                new Claim("username", user.UserName)
-            };
-            foreach(var role in roles)
-            {
-                claimsForToken.Add(new Claim("role", role));
-            }
+            
             // Step 2.4 create token
             var jwtSecurityToken = new JwtSecurityToken(
                 issuer: configuration["Authentication:Issuer"],
                 audience: configuration["Authentication:Audience"],
-                claims: claimsForToken,
+                claims: claims,
                 notBefore: DateTime.UtcNow,
                 expires: DateTime.UtcNow.AddMinutes(20),
                 signingCredentials: signinCredentials
