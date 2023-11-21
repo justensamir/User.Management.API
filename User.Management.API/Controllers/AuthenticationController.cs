@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using System.ComponentModel.DataAnnotations;
 using System.Data;
 using System.IdentityModel.Tokens.Jwt;
 using System.Reflection.Metadata.Ecma335;
@@ -10,8 +11,10 @@ using System.Text;
 using User.Management.API.Models;
 using User.Management.API.Models.Authentication.Login;
 using User.Management.API.Models.Authentication.SignUp;
+using User.Management.API.Models.DTOs;
 using User.Management.Service.Models;
 using User.Management.Service.Services;
+using static System.Net.WebRequestMethods;
 
 namespace User.Management.API.Controllers
 {
@@ -82,7 +85,7 @@ namespace User.Management.API.Controllers
             {
                 await userManager.AddToRoleAsync(user, role);
             
-                await CreateConfirmationEmailAsync(user);
+                await SendConfirmationEmailAsync(user);
 
                 return StatusCode(StatusCodes.Status201Created,
                     new Response { Status = "Success", Message = $"User Created & Email Sent to {user.Email} Successfully" });
@@ -109,19 +112,11 @@ namespace User.Management.API.Controllers
             return BadRequest("Invalid Email Or Token");
         }
 
-        private async Task CreateConfirmationEmailAsync(IdentityUser user)
-        {
-            // Add Token
-            var token = await userManager.GenerateEmailConfirmationTokenAsync(user);
-            var confirmationLink = Url.Action(nameof(ConfirmEmail), "Authentication", new { token, email = user.Email }, Request.Scheme);
-            var message = new Message(new string[] { user.Email! }, "Confiramtion Email", confirmationLink!);
-            await emailService.SendMessage(message);
-        }
-
         [HttpPost("Login")]
         public async Task<IActionResult> Login(LoginModel loginModel)
         {
             var user = await userManager.FindByNameAsync(loginModel.Username);
+
             if(user != null && await userManager.CheckPasswordAsync(user, loginModel.Password))
             {
                 if (!user.EmailConfirmed) return StatusCode(StatusCodes.Status403Forbidden, "Email not Confirmed");
@@ -129,36 +124,27 @@ namespace User.Management.API.Controllers
                 if(user.TwoFactorEnabled)
                 {
                     await signInManager.SignOutAsync();
+
                     await signInManager.PasswordSignInAsync(user, loginModel.Password, false, true);
 
                     var otp = await userManager.GenerateTwoFactorTokenAsync(user, "Email");
-                    Message message = new (new string[] { user.Email }, "OTP Confirmation",otp);
-                    await emailService.SendMessage(message);
-                    return StatusCode(
-                        StatusCodes.Status200OK,
-                        new { Status = "Success", Message = $"OTP Sent to {user.Email} Successfully" });
+                    
+                    var emailRequirements = new EmailRequirements(user.Email, "OTP Confirmation", otp);
+
+                    await SendRegularEmail(emailRequirements);
+
+                    return Ok(new { message = $"OTP Sent to {user.Email} Successfully" });
                 }
-                // Add token
-                var userRoles = await userManager.GetRolesAsync(user);
+                
+                var claims = await CreateClaimsForToken(user);
 
-                // Create Claims
-                var claimsForToken = new List<Claim>
-                {
-                    new Claim("sub", user.Id.ToString()),
-                    new Claim("email", user.Email),
-                    new Claim("username", user.UserName)
-                };
-                foreach (var role in userRoles)
-                {
-                    claimsForToken.Add(new Claim("role", role));
-                }
+                DateTime expiration;
 
-
-                var token = GenerateJWT(claimsForToken);
+                var token = GenerateJWT(claims, out expiration);
 
                 return Ok(new { 
-                    token = new JwtSecurityTokenHandler().WriteToken(token).ToString(),
-                    expiration = token.ValidTo 
+                    token,
+                    expiration 
                 });
             }
             return Unauthorized("Invalid username or password!!");
@@ -173,33 +159,89 @@ namespace User.Management.API.Controllers
                 var result = await signInManager.TwoFactorSignInAsync("Email", otp, false, true);
                 if(result.Succeeded)
                 {
-                    var userRoles = await userManager.GetRolesAsync(user);
-                    // Create Claims
-                    var claimsForToken = new List<Claim>
-                    {
-                        new Claim("sub", user.Id.ToString()),
-                        new Claim("email", user.Email),
-                        new Claim("username", user.UserName)
-                    };
-                    foreach (var role in userRoles)
-                    {
-                        claimsForToken.Add(new Claim("role", role));
-                    }
 
+                    var claims = await CreateClaimsForToken(user);
 
-                    var token = GenerateJWT(claimsForToken);
+                    DateTime expiration;
+
+                    var token = GenerateJWT(claims, out expiration);
 
                     return Ok(new
                     {
-                        token = new JwtSecurityTokenHandler().WriteToken(token).ToString(),
-                        expiration = token.ValidTo
+                        token,
+                        expiration
                     });
                 }
             }
             return NotFound("Invalid Username or OTP");
         }
 
-        private JwtSecurityToken GenerateJWT(List<Claim> claims)
+        [HttpPost("ForgetPassword")]
+        public async Task<IActionResult> ForgetPassword(string email)
+        {
+            var user = await userManager.FindByEmailAsync(email);
+            if(user != null)
+            {
+                await SendForgetPasswordEmail(user);
+                return Ok($"Password changed request is sent on {user.Email}. Please Open your email & click the link.");
+            }
+
+            return BadRequest("Couldn't send link to email, please try again ");
+        }
+
+        [HttpPost("ResetPassword")]
+        public async Task<IActionResult> ResetPassword(string token, string email)
+        {
+            return Ok();
+        }
+
+        private async Task SendConfirmationEmailAsync(IdentityUser user)
+        {
+            var token = await userManager.GenerateEmailConfirmationTokenAsync(user);
+
+            var emailReqs = new EmailRequirements(
+                action: "ConfirmEmail",
+                controller: "Authentication",
+                email: user.Email,
+                subject: "Confiramtion Email",
+                content: token
+                );
+
+            await SendEmailWithLink(emailReqs);
+        }
+
+        private async Task SendForgetPasswordEmail(IdentityUser user)
+        {
+            var token = await userManager.GeneratePasswordResetTokenAsync(user);
+
+            var emailReqs = new EmailRequirements(
+                action: "ResetPassword",
+                controller: "Authentication",
+                email: user.Email,
+                subject: "Forget Password Link",
+                content: token
+                );
+
+            await SendEmailWithLink(emailReqs);
+        }
+
+        private async Task SendEmailWithLink(EmailRequirements emailRequirements)
+        {
+            var link = Url.Action(emailRequirements.action, emailRequirements.controller, 
+                new { token=emailRequirements.content, emailRequirements.email }, Request.Scheme);
+
+            var message = new Message(new string[] { emailRequirements.email! }, emailRequirements.subject, link!);
+            
+            await emailService.SendMessage(message);
+        }
+
+        private async Task SendRegularEmail(EmailRequirements emailRequirements)
+        {
+            Message message = new(new string[] { emailRequirements.email }, emailRequirements.subject, emailRequirements.content);
+
+            await emailService.SendMessage(message);
+        }
+        private string GenerateJWT(List<Claim> claims, out DateTime expiration)
         {
             var key = configuration["Authentication:SecretForKey"];
             // Step 2: Create Token
@@ -219,7 +261,28 @@ namespace User.Management.API.Controllers
                 signingCredentials: signinCredentials
                 );
 
-            return jwtSecurityToken;
+            expiration = jwtSecurityToken.ValidTo;
+
+            return new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken).ToString();
         }
+
+        private async Task<List<Claim>> CreateClaimsForToken(IdentityUser user)
+        {
+            var userRoles = await userManager.GetRolesAsync(user);
+            
+            var claimsForToken = new List<Claim>
+                    {
+                        new Claim("sub", user.Id.ToString()),
+                        new Claim("email", user.Email),
+                        new Claim("username", user.UserName)
+                    };
+
+            foreach (var role in userRoles)
+            {
+                claimsForToken.Add(new Claim("role", role));
+            }
+
+            return claimsForToken;
+        } 
     }
 }

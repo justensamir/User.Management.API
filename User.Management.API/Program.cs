@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
@@ -16,6 +17,7 @@ namespace User.Management.API
         {
             var builder = WebApplication.CreateBuilder(args);
 
+            var constring = builder.Configuration.GetConnectionString("default");
             // Add services to the container.
 
             builder.Services.AddControllers();
@@ -55,6 +57,7 @@ namespace User.Management.API
                     }
                 });
             });
+            
 
             // For Entityframework
             builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -71,6 +74,11 @@ namespace User.Management.API
             builder.Services.Configure<IdentityOptions>(
                 options => options.SignIn.RequireConfirmedEmail = true
                 );
+
+            // token that will generate it will be valid for next 10 hours
+            builder.Services.Configure<DataProtectionTokenProviderOptions>(
+                options => options.TokenLifespan = TimeSpan.FromHours(10) 
+                ); 
 
             // Add Email Configs
             var emailConfig = builder.Configuration
@@ -105,6 +113,7 @@ namespace User.Management.API
             // Configure the HTTP request pipeline.
             if (app.Environment.IsDevelopment())
             {
+                
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
