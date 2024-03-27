@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace User.Management.API.Models.Data
 {
-    public class ApplicationDbContext : IdentityDbContext<IdentityUser>
+    public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     {
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options ) : base(options)
@@ -30,12 +30,16 @@ namespace User.Management.API.Models.Data
 
         private void SeedUsers(ModelBuilder builder)
         {
-            builder.Entity<IdentityUser>().HasData(
-                new IdentityUser() 
+            builder.Entity<ApplicationUser>().HasData(
+                new ApplicationUser() 
                 {
-                    Email="mo.samir@arpu.com",
+                    Id= Guid.NewGuid().ToString(),
+                    FristName="Mohamed",
+                    LastName= "Samir",
+                    Email="mohamedsamirasaad2000@gmail.com",
                     EmailConfirmed= true,
-                    NormalizedEmail= "mo.samir@arpu.com"
+                    TwoFactorEnabled= true,
+                    SecurityStamp= Guid.NewGuid().ToString(),
                 }
                 );
         }
